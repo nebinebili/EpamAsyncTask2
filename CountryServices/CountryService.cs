@@ -1,3 +1,6 @@
+using System.Net;
+using System.Text.Json;
+
 namespace CountryServices;
 
 /// <summary>
@@ -31,7 +34,53 @@ public class CountryService : ICountryService
     {
         // TODO: Use WebClient and JsonSerializer classes.
         // Use ServiceUrl and read RESTCOUNTRIES_API_KEY via Environment.GetEnvironmentVariable on each request (do not cache in static fields).
-        throw new NotImplementedException();
+        if (string.IsNullOrWhiteSpace(alpha2Or3Code))
+        {
+            throw new ArgumentException("Country code cannot be null or empty.", nameof(alpha2Or3Code));
+        }
+
+        if (this.currencyCountries.TryGetValue(alpha2Or3Code, out var weakReference)
+           && weakReference.TryGetTarget(out var cachedCurrency))
+        {
+            return cachedCurrency;
+        }
+
+        if (alpha2Or3Code.Length != 2 && alpha2Or3Code.Length != 3)
+        {
+            throw new ArgumentException("Invalid country code", nameof(alpha2Or3Code));
+        }
+
+        string endPoint = alpha2Or3Code.Length == 2
+    ? $"{ServiceUrl}/codes.alpha_2/{alpha2Or3Code}"
+    : $"{ServiceUrl}/codes.alpha_3/{alpha2Or3Code}";
+
+        string? apiKey = Environment.GetEnvironmentVariable(ApiKeyEnvironmentVariable);
+
+        using WebClient client = new WebClient();
+
+        client.Headers.Add("Authorization", $"Bearer {apiKey}");
+
+        string json = client.DownloadString(endPoint);
+
+        RestCountriesResponse? restCountriesResponse = JsonSerializer.Deserialize<RestCountriesResponse>(json);
+
+        CountryRecord? countryRecord = restCountriesResponse?.Data?.Objects?.FirstOrDefault();
+
+        if (countryRecord is null)
+        {
+            throw new ArgumentException("Country not found.", nameof(alpha2Or3Code));
+        }
+
+        LocalCurrency localCurrency = new LocalCurrency
+        {
+            CountryName = countryRecord.Names?.Common,
+            CurrencyCode = countryRecord.Currencies?.FirstOrDefault()?.Code,
+            CurrencySymbol = countryRecord.Currencies?.FirstOrDefault()?.Symbol,
+        };
+
+        this.currencyCountries[alpha2Or3Code] = new WeakReference<LocalCurrency>(localCurrency);
+
+        return localCurrency;
     }
 
     /// <summary>
@@ -42,11 +91,60 @@ public class CountryService : ICountryService
     /// <param name="token">Token for the cancellation of asynchronous operation.</param>
     /// <returns>Information about country currency as <see cref="LocalCurrency"/>.</returns>
     /// <exception cref="ArgumentException">Thrown if alpha2Or3Code is null, empty, whitespace or invalid country code.</exception>
-    public Task<LocalCurrency> GetLocalCurrencyByAlpha2Or3CodeAsync(string? alpha2Or3Code, CancellationToken token)
+    public async Task<LocalCurrency> GetLocalCurrencyByAlpha2Or3CodeAsync(string? alpha2Or3Code, CancellationToken token)
     {
-        // TODO: Use HttpClient and JsonSerializer classes. Notice the difference from WebClient class. In the future, in a similar situation, use only HttpClient.
-        // Use ServiceUrl and read RESTCOUNTRIES_API_KEY via Environment.GetEnvironmentVariable on each request (do not cache in static fields).
-        throw new NotImplementedException();
+        if (string.IsNullOrWhiteSpace(alpha2Or3Code))
+        {
+            throw new ArgumentException("Country code cannot be null or empty.", nameof(alpha2Or3Code));
+        }
+
+        if (alpha2Or3Code.Length != 2 && alpha2Or3Code.Length != 3)
+        {
+            throw new ArgumentException("Invalid country code", nameof(alpha2Or3Code));
+        }
+
+        if (this.currencyCountries.TryGetValue(alpha2Or3Code, out var weakReference)
+        && weakReference.TryGetTarget(out var cachedCurrency))
+        {
+            return cachedCurrency;
+        }
+
+        string endPoint = alpha2Or3Code.Length == 2
+    ? $"{ServiceUrl}/codes.alpha_2/{alpha2Or3Code}"
+    : $"{ServiceUrl}/codes.alpha_3/{alpha2Or3Code}";
+
+        using HttpClient client = new HttpClient();
+
+        string? apiKey = Environment.GetEnvironmentVariable(ApiKeyEnvironmentVariable);
+
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+
+        string json = await client.GetStringAsync(endPoint, token);
+
+        // Deserialize JSON
+        RestCountriesResponse? response =
+            JsonSerializer.Deserialize<RestCountriesResponse>(json);
+
+        CountryRecord? countryRecord = response?.Data?.Objects?.FirstOrDefault();
+
+        if (countryRecord is null)
+        {
+            throw new ArgumentException("Country not found.", nameof(alpha2Or3Code));
+        }
+
+        // Map to LocalCurrency
+        LocalCurrency localCurrency = new LocalCurrency
+        {
+            CountryName = countryRecord.Names?.Common,
+            CurrencyCode = countryRecord.Currencies?.FirstOrDefault()?.Code,
+            CurrencySymbol = countryRecord.Currencies?.FirstOrDefault()?.Symbol,
+        };
+
+        // Save to cache
+        this.currencyCountries[alpha2Or3Code] =
+            new WeakReference<LocalCurrency>(localCurrency);
+
+        return localCurrency;
     }
 
     /// <summary>
@@ -57,9 +155,42 @@ public class CountryService : ICountryService
     /// <exception cref="ArgumentException">Thrown if the capital name is null, empty, whitespace or nonexistent.</exception>
     public Country GetCountryInfoByCapital(string? capital)
     {
-        // TODO: Use WebClient and JsonSerializer classes.
-        // Use ServiceUrl and read RESTCOUNTRIES_API_KEY via Environment.GetEnvironmentVariable on each request (do not cache in static fields).
-        throw new NotImplementedException();
+        if (string.IsNullOrWhiteSpace(capital))
+        {
+            throw new ArgumentException("Capital cannot be null or empty.", nameof(capital));
+        }
+
+        string endPoint = $"{ServiceUrl}/capitals/{Uri.EscapeDataString(capital)}";
+
+        string? apiKey = Environment.GetEnvironmentVariable(ApiKeyEnvironmentVariable);
+
+        using WebClient client = new WebClient();
+
+        client.Headers.Add("Authorization", $"Bearer {apiKey}");
+
+        string json = client.DownloadString(endPoint);
+
+        RestCountriesResponse? response = JsonSerializer.Deserialize<RestCountriesResponse>(json);
+
+        CountryRecord? countryRecord = response?.Data?.Objects?.FirstOrDefault();
+
+        if (countryRecord is null)
+        {
+            throw new ArgumentException("Capital not found.", nameof(capital));
+        }
+
+        // 9. Map CountryRecord to Country
+        Country country = new Country
+        {
+            Name = countryRecord.Names?.Common,
+            CapitalName = countryRecord.Capitals?.FirstOrDefault()?.Name,
+            Area = countryRecord.Area?.Kilometers ?? 0,
+            Population = countryRecord.Population,
+            Flag = countryRecord.Flag?.UrlPng ?? countryRecord.Flag?.UrlSvg,
+        };
+
+        // 10. Return result
+        return country;
     }
 
     /// <summary>
@@ -69,10 +200,41 @@ public class CountryService : ICountryService
     /// <param name="token">Token for cancellation of asynchronous operation.</param>
     /// <returns>Information about the country as <see cref="Country"/>.</returns>
     /// <exception cref="ArgumentException">Thrown if the capital name is null, empty, whitespace or nonexistent.</exception>
-    public Task<Country> GetCountryInfoByCapitalAsync(string? capital, CancellationToken token)
+    public async Task<Country> GetCountryInfoByCapitalAsync(string? capital, CancellationToken token)
     {
-        // TODO: Use HttpClient and JsonSerializer classes. Notice the difference from WebClient class. In the future, in a similar situation, use only HttpClient.
-        // Use ServiceUrl and read RESTCOUNTRIES_API_KEY via Environment.GetEnvironmentVariable on each request (do not cache in static fields).
-        throw new NotImplementedException();
+        if (string.IsNullOrWhiteSpace(capital))
+        {
+            throw new ArgumentException("Capital cannot be null or empty.", nameof(capital));
+        }
+
+        string endPoint = $"{ServiceUrl}/capitals/{Uri.EscapeDataString(capital)}";
+
+        string? apiKey = Environment.GetEnvironmentVariable(ApiKeyEnvironmentVariable);
+
+        using HttpClient client = new HttpClient();
+
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+
+        string json = await client.GetStringAsync(endPoint, token);
+
+        RestCountriesResponse? response = JsonSerializer.Deserialize<RestCountriesResponse>(json);
+
+        CountryRecord? countryRecord = response?.Data?.Objects?.FirstOrDefault();
+
+        if (countryRecord is null)
+        {
+            throw new ArgumentException("Capital not found.", nameof(capital));
+        }
+
+        Country country = new Country
+        {
+            Name = countryRecord.Names?.Common,
+            CapitalName = countryRecord.Capitals?.FirstOrDefault()?.Name,
+            Area = countryRecord.Area?.Kilometers ?? 0,
+            Population = countryRecord.Population,
+            Flag = countryRecord.Flag?.UrlPng ?? countryRecord.Flag?.UrlSvg,
+        };
+
+        return country;
     }
 }
