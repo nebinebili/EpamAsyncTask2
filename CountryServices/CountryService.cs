@@ -32,8 +32,6 @@ public class CountryService : ICountryService
     /// <exception cref="ArgumentException">Thrown if alpha2Or3Code is null, empty, whitespace or invalid country code.</exception>
     public LocalCurrency GetLocalCurrencyByAlpha2Or3Code(string? alpha2Or3Code)
     {
-        // TODO: Use WebClient and JsonSerializer classes.
-        // Use ServiceUrl and read RESTCOUNTRIES_API_KEY via Environment.GetEnvironmentVariable on each request (do not cache in static fields).
         if (string.IsNullOrWhiteSpace(alpha2Or3Code))
         {
             throw new ArgumentException("Country code cannot be null or empty.", nameof(alpha2Or3Code));
@@ -91,60 +89,26 @@ public class CountryService : ICountryService
     /// <param name="token">Token for the cancellation of asynchronous operation.</param>
     /// <returns>Information about country currency as <see cref="LocalCurrency"/>.</returns>
     /// <exception cref="ArgumentException">Thrown if alpha2Or3Code is null, empty, whitespace or invalid country code.</exception>
-    public async Task<LocalCurrency> GetLocalCurrencyByAlpha2Or3CodeAsync(string? alpha2Or3Code, CancellationToken token)
+    public Task<LocalCurrency> GetLocalCurrencyByAlpha2Or3CodeAsync(
+    string? alpha2Or3Code,
+    CancellationToken token)
     {
+        // Parameter validation
         if (string.IsNullOrWhiteSpace(alpha2Or3Code))
         {
-            throw new ArgumentException("Country code cannot be null or empty.", nameof(alpha2Or3Code));
+            throw new ArgumentException(
+                "Country code cannot be null or empty.",
+                nameof(alpha2Or3Code));
         }
 
         if (alpha2Or3Code.Length != 2 && alpha2Or3Code.Length != 3)
         {
-            throw new ArgumentException("Invalid country code", nameof(alpha2Or3Code));
+            throw new ArgumentException(
+                "Invalid country code.",
+                nameof(alpha2Or3Code));
         }
 
-        if (this.currencyCountries.TryGetValue(alpha2Or3Code, out var weakReference)
-        && weakReference.TryGetTarget(out var cachedCurrency))
-        {
-            return cachedCurrency;
-        }
-
-        string endPoint = alpha2Or3Code.Length == 2
-    ? $"{ServiceUrl}/codes.alpha_2/{alpha2Or3Code}"
-    : $"{ServiceUrl}/codes.alpha_3/{alpha2Or3Code}";
-
-        using HttpClient client = new HttpClient();
-
-        string? apiKey = Environment.GetEnvironmentVariable(ApiKeyEnvironmentVariable);
-
-        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
-
-        string json = await client.GetStringAsync(endPoint, token);
-
-        // Deserialize JSON
-        RestCountriesResponse? response =
-            JsonSerializer.Deserialize<RestCountriesResponse>(json);
-
-        CountryRecord? countryRecord = response?.Data?.Objects?.FirstOrDefault();
-
-        if (countryRecord is null)
-        {
-            throw new ArgumentException("Country not found.", nameof(alpha2Or3Code));
-        }
-
-        // Map to LocalCurrency
-        LocalCurrency localCurrency = new LocalCurrency
-        {
-            CountryName = countryRecord.Names?.Common,
-            CurrencyCode = countryRecord.Currencies?.FirstOrDefault()?.Code,
-            CurrencySymbol = countryRecord.Currencies?.FirstOrDefault()?.Symbol,
-        };
-
-        // Save to cache
-        this.currencyCountries[alpha2Or3Code] =
-            new WeakReference<LocalCurrency>(localCurrency);
-
-        return localCurrency;
+        return this.GetLocalCurrencyAsyncCore(alpha2Or3Code, token);
     }
 
     /// <summary>
@@ -179,7 +143,6 @@ public class CountryService : ICountryService
             throw new ArgumentException("Capital not found.", nameof(capital));
         }
 
-        // 9. Map CountryRecord to Country
         Country country = new Country
         {
             Name = countryRecord.Names?.Common,
@@ -189,7 +152,6 @@ public class CountryService : ICountryService
             Flag = countryRecord.Flag?.UrlPng ?? countryRecord.Flag?.UrlSvg,
         };
 
-        // 10. Return result
         return country;
     }
 
@@ -200,32 +162,111 @@ public class CountryService : ICountryService
     /// <param name="token">Token for cancellation of asynchronous operation.</param>
     /// <returns>Information about the country as <see cref="Country"/>.</returns>
     /// <exception cref="ArgumentException">Thrown if the capital name is null, empty, whitespace or nonexistent.</exception>
-    public async Task<Country> GetCountryInfoByCapitalAsync(string? capital, CancellationToken token)
+    public Task<Country> GetCountryInfoByCapitalAsync(
+    string? capital,
+    CancellationToken token)
     {
+        // Parameter validation
         if (string.IsNullOrWhiteSpace(capital))
         {
-            throw new ArgumentException("Capital cannot be null or empty.", nameof(capital));
+            throw new ArgumentException(
+                "Capital cannot be null or empty.",
+                nameof(capital));
         }
 
-        string endPoint = $"{ServiceUrl}/capitals/{Uri.EscapeDataString(capital)}";
+        return this.GetCountryInfoByCapitalAsyncCore(capital, token);
+    }
 
+    private async Task<LocalCurrency> GetLocalCurrencyAsyncCore(
+        string alpha2Or3Code,
+        CancellationToken token)
+    {
+        // Check cache
+        if (this.currencyCountries.TryGetValue(alpha2Or3Code, out var weakReference)
+            && weakReference.TryGetTarget(out var cachedCurrency))
+        {
+            return cachedCurrency;
+        }
+
+        // Determine endpoint
+        string endPoint = alpha2Or3Code.Length == 2
+            ? $"{ServiceUrl}/codes.alpha_2/{alpha2Or3Code}"
+            : $"{ServiceUrl}/codes.alpha_3/{alpha2Or3Code}";
+
+        // Read API key
         string? apiKey = Environment.GetEnvironmentVariable(ApiKeyEnvironmentVariable);
 
         using HttpClient client = new HttpClient();
 
-        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
 
-        string json = await client.GetStringAsync(endPoint, token);
+        // Send asynchronous request
+        string json = await client.GetStringAsync(new Uri(endPoint), token);
 
-        RestCountriesResponse? response = JsonSerializer.Deserialize<RestCountriesResponse>(json);
+        // Deserialize JSON
+        RestCountriesResponse? response =
+            JsonSerializer.Deserialize<RestCountriesResponse>(json);
 
-        CountryRecord? countryRecord = response?.Data?.Objects?.FirstOrDefault();
+        CountryRecord? countryRecord =
+            response?.Data?.Objects?.FirstOrDefault();
 
         if (countryRecord is null)
         {
-            throw new ArgumentException("Capital not found.", nameof(capital));
+            throw new ArgumentException(
+                "Country not found.",
+                nameof(alpha2Or3Code));
         }
 
+        // Mapping
+        LocalCurrency localCurrency = new LocalCurrency
+        {
+            CountryName = countryRecord.Names?.Common,
+            CurrencyCode = countryRecord.Currencies?.FirstOrDefault()?.Code,
+            CurrencySymbol = countryRecord.Currencies?.FirstOrDefault()?.Symbol,
+        };
+
+        // Save to cache
+        this.currencyCountries[alpha2Or3Code] =
+            new WeakReference<LocalCurrency>(localCurrency);
+
+        return localCurrency;
+    }
+
+    private async Task<Country> GetCountryInfoByCapitalAsyncCore(
+        string capital,
+        CancellationToken token)
+    {
+        // Build endpoint
+        string endPoint =
+            $"{ServiceUrl}/capitals/{Uri.EscapeDataString(capital)}";
+
+        // Read API key
+        string? apiKey = Environment.GetEnvironmentVariable(ApiKeyEnvironmentVariable);
+
+        using HttpClient client = new HttpClient();
+
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+
+        // Send asynchronous request
+        string json = await client.GetStringAsync(new Uri(endPoint), token);
+
+        // Deserialize JSON
+        RestCountriesResponse? response =
+            JsonSerializer.Deserialize<RestCountriesResponse>(json);
+
+        CountryRecord? countryRecord =
+            response?.Data?.Objects?.FirstOrDefault();
+
+        if (countryRecord is null)
+        {
+            throw new ArgumentException(
+                "Capital not found.",
+                nameof(capital));
+        }
+
+        // Mapping
         Country country = new Country
         {
             Name = countryRecord.Names?.Common,
